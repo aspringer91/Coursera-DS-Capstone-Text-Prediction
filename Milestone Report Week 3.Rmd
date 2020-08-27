@@ -1,0 +1,234 @@
+---
+title: 'Week 3: Milestone Report'
+subtitle: 'Coursera Data Science Capstone'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tm)
+library(stringr)
+library(R.utils)
+library(LaF)
+library(tokenizers)
+library(data.table)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+```
+
+# Introduction
+
+This report reviews the Explanatory Data Analaysis (EDA) I performed on the text data provided for the Coursera Data Science Specialization Capstone project. The data set includes 3 corpora of text, a set of Tweets, a set of blog posts, and a set of news articles. The goal of this analysis was to understand the scope of each corpora and recognize patterns in the text. I will also explain a brief plan for a prediction algorithm that attempts to finish a sentence based on input text.
+
+# Basic Summary
+
+The number of lines in each corpus is shown below:
+
+```{r cache=TRUE}
+#Count lines in each text source
+con <- unz("/home/andspringer17/Final Capstone/Coursera-SwiftKey.zip","final/en_US/en_US.twitter.txt",open="rb")
+twitrLines <- countLines(con)
+close(con)
+con <- unz("/home/andspringer17/Final Capstone/Coursera-SwiftKey.zip","final/en_US/en_US.blogs.txt",open="rb")
+blogLines <- countLines(con)
+close(con)
+con <- unz("/home/andspringer17/Final Capstone/Coursera-SwiftKey.zip","final/en_US/en_US.news.txt",open="rb")
+newsLines <- countLines(con)
+close(con)
+
+lineCounts <- data.frame(Source = c("Twitter", "Blogs","News"), 
+                         Lines = c(twitrLines,blogLines,newsLines))
+```
+
+```{r}
+kable(lineCounts, format = "html", format.args = list(big.mark = ",")) %>%
+  kable_styling()
+```
+
+Due to the large size of each corpus I will only perform EDA on a sample of each dataset. The sample includes 5% of each corpus. The line count and word count of each corpus after sampling is below. We see that Twitter has the most lines but least words, which makes sense because we know tweets are short and character limited.
+
+```{r cache = TRUE}
+#Paths to each file
+pathT <- "/home/andspringer17/Final Capstone/Final Data/en_US/en_US.twitter.txt"
+pathB <- "/home/andspringer17/Final Capstone/Final Data/en_US/en_US.blogs.txt"
+pathN <- "/home/andspringer17/Final Capstone/Final Data/en_US/en_US.news.txt"
+
+#Sample 5% of each text source
+set.seed(101)
+twtrSamp <- sample_lines(pathT,twitrLines*.05,nlines=twitrLines)
+blogSamp <- sample_lines(pathB,blogLines*.05,nlines=blogLines)
+newsSamp <- sample_lines(pathN,newsLines*.05,nlines=newsLines)
+
+allSamp <- list(twitter = twtrSamp, blog = blogSamp, news = newsSamp)
+rm(twtrSamp,blogSamp,newsSamp)
+
+#create the corpus
+corp <- VCorpus(VectorSource(allSamp))
+rm(allSamp)
+names(corp) <- c("Twitter", "Blog", "News")
+#remove retweet character from twitter (RT :)
+removeRetweet <- function(x) gsub("^RT :| RT :","",x)
+corp <- tm_map(corp, content_transformer(removeRetweet))
+corp <- tm_map(corp, content_transformer(tolower))
+dtm <- DocumentTermMatrix(corp)
+wordCounts <- rowSums(as.matrix(dtm))
+sizeDf <- data.frame(Lines = c(length(corp[["Twitter"]][[1]]),
+                               length(corp[["Blog"]][[1]]),
+                               length(corp[["News"]][[1]])),
+                     Words = wordCounts,
+                     `Distinct Words` = c(ncol((dtm[1,as.matrix(dtm[1,]) > 0])),
+                                          ncol((dtm[2,as.matrix(dtm[2,]) > 0])),
+                                          ncol((dtm[3,as.matrix(dtm[3,]) > 0]))))
+```
+
+```{r fig.width=10}
+kable(sizeDf, format = "html", format.args = list(big.mark = ",")) %>%
+  kable_styling()
+sizeDf$Source <- row.names(sizeDf)
+pWords <- ggplot(data=sizeDf, aes(x=Source,y=Words)) + geom_bar(stat="identity")
+pLines <- ggplot(data=sizeDf, aes(x=Source,y=Lines)) + geom_bar(stat="identity")
+
+grid.arrange(pWords, pLines, ncol = 2)
+```
+
+# Stop Words in the Corpus
+
+By comparing word counts with stop words included vs. with stop words removed we can see how prevalent stop words are in the corpus. The table below shows that stop words contribute greater than 30% of the total words, but only about 2-3% of the distinct words. This is an important consideration when performing text prediction. If stop words are roughly 30% of the total words, then the next word a person will write is likely to be a stop word. 
+
+```{r}
+saveRDS(corp, "corpTemp.rds")
+corp <- tm_map(corp,removeWords, stopwords("english"))
+dtm <- DocumentTermMatrix(corp)
+wordCounts <- rowSums(as.matrix(dtm))
+sizeDfNoStop <- data.frame(Lines = c(length(corp[["Twitter"]][[1]]),
+                                     length(corp[["Blog"]][[1]]),
+                                     length(corp[["News"]][[1]])),
+                           Words = wordCounts,
+                           `Distinct Words` = c(ncol((dtm[1,as.matrix(dtm[1,]) > 0])),
+                                                ncol((dtm[2,as.matrix(dtm[2,]) > 0])),
+                                                ncol((dtm[3,as.matrix(dtm[3,]) > 0]))))
+diffMetrics <- sizeDf[,2:3] - sizeDfNoStop[,2:3]
+diffMetrics <- diffMetrics / sizeDf[,2:3]
+
+kable(diffMetrics, format = "html", format.args = list(big.mark = ",")) %>%
+  kable_styling()
+```
+
+# Term Frequency
+
+The following metrics are calculated with stop words removed. Additional text cleaning included removing punctuation, numbers, and stemming the document. I'll look at the most frequent words and n-grams in each corpus. 
+
+```{r fig.width=10}
+#More text cleaning
+corp <- tm_map(corp, removePunctuation)
+  #Removes these characters: ! " # $ % & ' ( ) * + , - . / : ; < = > ? @ [ \ ] ^ _ ` { | } ~
+corp <- tm_map(corp, removeNumbers)
+corp <- tm_map(corp, stemDocument)
+
+#Calculate most frequent words
+twtrtf <- termFreq(corp[["Twitter"]][[1]])
+twtrtf <- twtrtf[order(-twtrtf)][1:10]
+blogtf <- termFreq(corp[["Blog"]][[1]])
+blogtf <- blogtf[order(-blogtf)][1:10]
+newstf <- termFreq(corp[["News"]][[1]])
+newstf <- newstf[order(-newstf)][1:10]
+
+twtrDf <- data.table(word = names(twtrtf), count = twtrtf)
+blogDf <- data.table(word = names(blogtf), count = blogtf)
+newsDf <- data.table(word = names(newstf), count = newstf)
+
+gT <- ggplot(data=twtrDf, aes(x=reorder(word, count), y = count)) + geom_bar(stat = "identity")
+gT <- gT  + coord_flip() + theme(axis.title.y = element_blank()) + ggtitle("Twitter")
+gB <- ggplot(data=blogDf, aes(x=reorder(word, count), y = count)) + geom_bar(stat = "identity")
+gB <- gB  + coord_flip() + theme(axis.title.y = element_blank()) + ggtitle("Blogs")
+gN <- ggplot(data=newsDf, aes(x=reorder(word, count), y = count)) + geom_bar(stat = "identity")
+gN <- gN  + coord_flip() + theme(axis.title.y = element_blank()) + ggtitle("News")
+
+grid.arrange(gT,gB,gN,ncol=3, top="Single Word Frequency")
+```
+
+```{r fig.width=10}
+#Bigrams
+twtrBigram <- tokenize_ngrams(corp[["Twitter"]][[1]],n=2)
+twtrBigram <- data.table(bigrams = unlist(twtrBigram))
+twtrBigram <- twtrBigram[, .N, by = bigrams][order(-N)]
+twtrBigram <- twtrBigram[!is.na(bigrams),]
+topTwtr <- twtrBigram[1:10]
+topTwtr$Source <- "Twitter"
+#head(twtrBigram,20)
+
+blogBigram <- tokenize_ngrams(corp[["Blog"]][[1]],n=2)
+blogBigram <- data.table(bigrams = unlist(blogBigram))
+blogBigram <- blogBigram[, .N, by = bigrams][order(-N)]
+blogBigram <- blogBigram[!is.na(bigrams),]
+topBlog <- blogBigram[1:10]
+topBlog$Source <- "Blogs"
+#head(blogBigram,20)
+
+newsBigram <- tokenize_ngrams(corp[["News"]][[1]],n=2)
+newsBigram <- data.table(bigrams = unlist(newsBigram))
+newsBigram <- newsBigram[, .N, by = bigrams][order(-N)]
+newsBigram <- newsBigram[!is.na(bigrams),]
+topNews <- newsBigram[1:10]
+topNews$Source <- "News"
+
+rm(twtrBigram, blogBigram, newsBigram)
+
+p1 <- ggplot(data = topTwtr, aes(x=reorder(bigrams, N), y = N)) + geom_bar(stat = "identity")
+p1 <- p1  + coord_flip() + theme(axis.title.y = element_blank()) + ylab("Count")
+p1 <- p1 + ggtitle("Twitter")
+p2 <- ggplot(data = topBlog, aes(x=reorder(bigrams, N), y = N)) + geom_bar(stat = "identity")
+p2 <- p2  + coord_flip() + theme(axis.title.y = element_blank()) + ylab("Count") 
+p2 <- p2 + ggtitle("Blogs")
+p3 <- ggplot(data = topNews, aes(x=reorder(bigrams, N), y = N)) + geom_bar(stat = "identity")
+p3 <- p3  + coord_flip() + theme(axis.title.y = element_blank()) + ylab("Count")
+p3 <- p3 + ggtitle("News")
+
+grid.arrange(p1,p2,p3,ncol=3, top= "Bigram Frequency")
+```
+
+```{r fig.width=10}
+#   Trigrams
+twtrTrigram <- tokenize_ngrams(corp[["Twitter"]][[1]],n=3)
+twtrTrigram <- data.table(trigrams = unlist(twtrTrigram))
+twtrTrigram <- twtrTrigram[, .N, by = trigrams][order(-N)]
+twtrTrigram <- twtrTrigram[!is.na(trigrams),]
+topTwtr <- twtrTrigram[1:10]
+topTwtr$Source <- "Twitter"
+#head(twtrTrigram,20)
+
+blogTrigram <- tokenize_ngrams(corp[["Blog"]][[1]],n=3)
+blogTrigram <- data.table(trigrams = unlist(blogTrigram))
+blogTrigram <- blogTrigram[, .N, by = trigrams][order(-N)]
+blogTrigram <- blogTrigram[!is.na(trigrams),]
+topBlog <- blogTrigram[1:10]
+topBlog$Source <- "Blogs"
+#head(blogTrigram,20)
+
+newsTrigram <- tokenize_ngrams(corp[["News"]][[1]],n=3)
+newsTrigram <- data.table(trigrams = unlist(newsTrigram))
+newsTrigram <- newsTrigram[, .N, by = trigrams][order(-N)]
+newsTrigram <- newsTrigram[!is.na(trigrams),]
+topNews <- newsTrigram[1:10]
+topNews$Source <- "News"
+
+rm(twtrTrigram, blogTrigram, newsTrigram)
+
+p1 <- ggplot(data = topTwtr, aes(x=reorder(trigrams, N), y = N)) + geom_bar(stat = "identity")
+p1 <- p1  + coord_flip() + theme(axis.title.y = element_blank()) + ylab("Count")
+p1 <- p1 + ggtitle("Twitter")
+p2 <- ggplot(data = topBlog, aes(x=reorder(trigrams, N), y = N)) + geom_bar(stat = "identity")
+p2 <- p2  + coord_flip() + theme(axis.title.y = element_blank()) + ylab("Count") 
+p2 <- p2 + ggtitle("Blogs")
+p3 <- ggplot(data = topNews, aes(x=reorder(trigrams, N), y = N)) + geom_bar(stat = "identity")
+p3 <- p3  + coord_flip() + theme(axis.title.y = element_blank()) + ylab("Count")
+p3 <- p3 + ggtitle("News")
+
+grid.arrange(p1,p2,p3,ncol=3, top= "Trigram Frequency")
+```
+
+# Basic Prediction Model
+
+A basic prediction model can be built off this data using the bigram and trigram frequency tables. By looking in the frequency tables for bigrams or trigrams that start with the input text, one can predict the most likely next word by knowing what n-gram appears most frequently. For example, if the input is "I like", by searching for the most frequency trigram that begins with "I like" we can use the trigram to predict what the next word will be. 

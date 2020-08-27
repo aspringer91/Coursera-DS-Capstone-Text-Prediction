@@ -1,0 +1,54 @@
+---
+title: "Text Prediction Algorithm Pitch"
+subtitle: https://aspringer.shinyapps.io/TextPredictionAlgorithm/
+date: "May 5, 2020"
+output: ioslides_presentation
+incremental: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## How the Model Works
+
+This model takes a chunk of text and predicts what the next words will be, based on a corpus of sentences from twitter, blogs, and news. The prediction algorithm follows this sequence of steps:  
+
+1. Clean the input text by making lower case, removing numbers and punctuation, and stemming each word  
+2. Find all sentences that contain the input text  
+3. For each sentence determine the next words following the input text, up to three words, these are the possible predictions 
+4. For each possible prediction, determine how many times it appeared in the corpus  
+5. Return whichever possible prediction appeared most frequently in our corpus of sentences 
+
+## Expected Quantitative Performance
+
+Expected performance was determined by taking 200 random sentences (not included in the prediction corpus) and determining how many times the first five words could accurately predict the next words. The results from the test set are as follows:  
+  
+* 20 out of 200 matched the next word = 10%  
+* 8 out of 200 matched the next word when it was not a stop word = 4%
+
+## Example 
+
+Input text: "When my mom turns on"
+
+The longest possible match in this case is "turn on" and this is a sample of sentences that contain the phrase.
+
+```{r}
+exampleOutput <- readRDS("ExampleSentences.rds")
+exampleOutput
+```
+
+The model will find all sentences that contain the longest match and for each sentence, determine the words that follow the match.
+
+## Example Continued
+
+The words following each match are parsed out and grouped together to determine how many times each phrase occurs. For this example, the most common occurences are:  
+
+```{r}
+exampleOutput <- readRDS("ExampleOutput.rds")
+exampleOutput
+```
+
+The model selects the phrase that occured the most times, in this case, "the light."
+
+
